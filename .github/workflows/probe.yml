@@ -48,7 +48,17 @@ jobs:
         shell: powershell
         run: |
           $p = Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$pwd\script\podpeek.ps1" -PassThru
-          Start-Sleep 15
+          Start-Sleep 4
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$pwd\captura.png")
+          Start-Sleep 11
           Write-Host "sigue vivo: $(-not $p.HasExited)"
           if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
           Get-Content "$env:LOCALAPPDATA\PodPeek\podpeek-script.log" -Encoding UTF8 | ForEach-Object { Write-Host "LOG $_" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captura
+          path: captura.png
