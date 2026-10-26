@@ -25,27 +25,27 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Sin errores de sintaxis y la parte nativa compila
+      - name: Sintaxis, partes en C# y ventana
         shell: powershell
         run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$pwd\script\podpeek.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
-          . "$pwd\script\PodPeekLoader.ps1"
-          Import-PodPeekNative "$pwd\script"
-          [PodPeekNative.Win]::Build
-          try { [PodPeekNative.Ble]::Start(-72) } catch { Write-Host "sin Bluetooth en el runner (normal): $($_.Exception.Message)" }
-          [PodPeekNative.Ble]::Drain().Count
-          Write-Host "Escáner Bluetooth compila"
-          # La ventana (XAML) se carga sin errores
-          Add-Type -AssemblyName PresentationFramework
-          $src = [IO.File]::ReadAllText("$pwd\script\podpeek.ps1")
-          $start = $src.IndexOf("[xml]`$xaml = @'") + 15
-          $end = $src.IndexOf("'@", $start)
-          [xml]$xaml = $src.Substring($start, $end - $start).Trim()
-          $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
-          if (-not $win.FindName('ArcL')) { throw 'falta ArcL' }
-          Write-Host "XAML OK"
+          $e = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$pwd\script\podpeek.ps1", [ref]$null, [ref]$e) | Out-Null
+          if ($e) { $e | ForEach-Object { Write-Error $_ }; exit 1 }
+          Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekNative.cs"))
+          $w = [PodPeekNative.BleScanner]::Start(-72)   # sin Bluetooth en el runner queda en Aborted, pero se crea
+          if ([PodPeekNative.BleScanner]::LastError) { throw [PodPeekNative.BleScanner]::LastError }
+          Write-Host "escáner: $([PodPeekNative.BleScanner]::Status($w))"
+      - name: Arranca 15 s sin errores
+        shell: powershell
+        run: |
+          $p = Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$pwd\script\podpeek.ps1" -PassThru
+          Start-Sleep 15
+          $alive = -not $p.HasExited
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          $log = Get-Content "$env:LOCALAPPDATA\PodPeek\podpeek-script.log" -Encoding UTF8
+          $log | ForEach-Object { Write-Host $_ }
+          if (-not $alive) { throw 'el script se ha cerrado solo' }
+          if ($log -match 'error') { throw 'hay errores en el registro' }
 
   build:
     name: PodPeek.exe
