@@ -57,10 +57,12 @@ trap { Write-Log "error: $_ $($_.ScriptStackTrace)"; continue }
 Write-Log "PodPeek script en Windows $([Environment]::OSVersion.Version), PowerShell $($PSVersionTable.PSVersion)"
 
 # ─── Partes nativas (audio y ventana) ───────────────────────────────────────
-. (Join-Path $script:Here 'PodPeekLoader.ps1')
-Import-PodPeekNative $script:Here
+Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $script:Here 'PodPeekNative.cs')))
 
 # ─── WinRT: Bluetooth y control de medios ───────────────────────────────────
+$null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
+$null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
+$null = [Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType = WindowsRuntime]
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
 
 # Las operaciones asíncronas de WinRT, esperadas desde PowerShell 5.1
@@ -505,26 +507,42 @@ function Connect-AirPods {
 $script:UI.ConnectButton.Add_Click({ Connect-AirPods })
 
 # ─── Bluetooth: solo anuncios de Apple, y con señal suficiente ──────────────
-try { Write-Log ("escáner Bluetooth: " + [PodPeekNative.Ble]::Start(-72)) } catch { Write-Log "no se pudo arrancar el escáner Bluetooth: $_" }
+try {
+    $script:Watcher = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher
+    $script:Watcher.ScanningMode = 'Passive'
+    $apple = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData
+    $apple.CompanyId = 0x004C
+    $script:Watcher.AdvertisementFilter.Advertisement.ManufacturerData.Add($apple)
+    $script:Watcher.SignalStrengthFilter.InRangeThresholdInDBm = -72
+    [PodPeekNative.WinRTEvents]::Subscribe($script:Watcher, 'Received')
+    $script:Watcher.Start()
+    Write-Log "escáner Bluetooth: $($script:Watcher.Status)"
+} catch { Write-Log "no se pudo arrancar el escáner Bluetooth: $_" }
 
 function Read-Advertisements {
     # Llegan muchos: nos basta con el más reciente de los nuestros en cada ronda
     $latest = $null
-    foreach ($a in [PodPeekNative.Ble]::Drain()) {
-        $s = ConvertFrom-Proximity $a.Data
-        if (-not $s) { continue }
-        $now = Get-Date
-        $same = $a.Address -eq $script:Address
-        $stale = ($now - $script:LastSeen).TotalSeconds -gt 8
-        # Varios AirPods cerca (oficina): seguimos a los de más señal y solo cambiamos si otros llegan claramente más fuertes
-        if (-not $same -and -not $stale -and $a.Rssi -lt $script:Rssi + 6) { continue }
-        $script:Address = $a.Address
-        $script:Rssi = $a.Rssi
-        $script:LastSeen = $now
-        $latest = $s
-        if (($now - $script:LastRawLog).TotalMinutes -ge 1) {
-            $script:LastRawLog = $now
-            Write-Log ("anuncio {0} rssi={1}" -f ([BitConverter]::ToString($a.Data)), $a.Rssi)
+    foreach ($a in [PodPeekNative.WinRTEvents]::Drain()) {
+        $rssi = $a.RawSignalStrengthInDBm
+        foreach ($m in $a.Advertisement.ManufacturerData) {
+            if ($m.CompanyId -ne 0x004C) { continue }
+            $bytes = New-Object byte[] $m.Data.Length
+            [Windows.Storage.Streams.DataReader]::FromBuffer($m.Data).ReadBytes($bytes)
+            $s = ConvertFrom-Proximity $bytes
+            if (-not $s) { continue }
+            $now = Get-Date
+            $same = $a.BluetoothAddress -eq $script:Address
+            $stale = ($now - $script:LastSeen).TotalSeconds -gt 8
+            # Varios AirPods cerca (oficina): seguimos a los de más señal y solo cambiamos si otros llegan claramente más fuertes
+            if (-not $same -and -not $stale -and $rssi -lt $script:Rssi + 6) { continue }
+            $script:Address = $a.BluetoothAddress
+            $script:Rssi = $rssi
+            $script:LastSeen = $now
+            $latest = $s
+            if (($now - $script:LastRawLog).TotalMinutes -ge 1) {
+                $script:LastRawLog = $now
+                Write-Log ("anuncio {0} rssi={1}" -f ([BitConverter]::ToString($bytes)), $rssi)
+            }
         }
     }
     if ($latest) { On-Status $latest }
@@ -575,7 +593,7 @@ $script:ThemeTimer.Start()
 
 function Stop-PodPeek {
     Write-Log 'salir'
-    [PodPeekNative.Ble]::Stop()
+    try { $script:Watcher.Stop() } catch { }
     $script:Tray.Visible = $false
     $script:Tray.Dispose()
     [System.Windows.Threading.Dispatcher]::CurrentDispatcher.InvokeShutdown()

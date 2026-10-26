@@ -234,3 +234,55 @@ namespace PodPeekNative
         public static bool TaskbarDark { get { return ThemeFlag("SystemUsesLightTheme") == 0; } }
     }
 }
+
+namespace PodPeekNative
+{
+    using System.Reflection;
+    using System.Runtime.InteropServices.WindowsRuntime;
+
+    /// <summary>
+    /// Suscribirse a un evento WinRT desde PowerShell 5.1, que no sabe hacerlo (Register-ObjectEvent lo rechaza).
+    /// Se hace como .NET por dentro: WindowsRuntimeMarshal.AddEventHandler, llamado por reflexión para no tener que
+    /// compilar contra las librerías WinRT. Los argumentos de cada evento se guardan en una cola que PowerShell
+    /// vacía cada poco con Drain().
+    /// </summary>
+    public static class WinRTEvents
+    {
+        static readonly object Gate = new object();
+        static readonly List<object> Queue = new List<object>();
+
+        public static void OnEvent(object sender, object args)
+        {
+            lock (Gate)
+            {
+                if (Queue.Count >= 300) Queue.RemoveAt(0);
+                Queue.Add(args);
+            }
+        }
+
+        public static void Subscribe(object target, string eventName)
+        {
+            EventInfo ev = target.GetType().GetEvent(eventName);
+            if (ev == null) throw new ArgumentException("No existe el evento " + eventName);
+            Type handlerType = ev.EventHandlerType;
+            Type tokenType = typeof(EventRegistrationToken);
+
+            Delegate handler = Delegate.CreateDelegate(handlerType, typeof(WinRTEvents).GetMethod("OnEvent"));
+            Delegate add = Delegate.CreateDelegate(typeof(Func<,>).MakeGenericType(handlerType, tokenType), target, ev.GetAddMethod());
+            Delegate remove = Delegate.CreateDelegate(typeof(Action<>).MakeGenericType(tokenType), target, ev.GetRemoveMethod());
+
+            MethodInfo addHandler = typeof(WindowsRuntimeMarshal).GetMethod("AddEventHandler").MakeGenericMethod(handlerType);
+            addHandler.Invoke(null, new object[] { add, remove, handler });
+        }
+
+        public static object[] Drain()
+        {
+            lock (Gate)
+            {
+                object[] all = Queue.ToArray();
+                Queue.Clear();
+                return all;
+            }
+        }
+    }
+}

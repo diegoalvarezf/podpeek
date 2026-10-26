@@ -1,0 +1,53 @@
+name: Probe
+# Prueba exploratoria en ramas probe/**: informa de cada paso y nunca falla (no manda correos de error)
+on:
+  push:
+    branches: ["probe/**"]
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Script paso a paso
+        shell: powershell
+        run: |
+          function Step($name, [scriptblock]$code) {
+            try { $r = & $code; Write-Host "OK   $name $r" } catch { Write-Host "FAIL $name -> $($_.Exception.GetType().Name): $($_.Exception.Message)" }
+          }
+          Step 'sintaxis' { $e = $null; [System.Management.Automation.Language.Parser]::ParseFile("$pwd\script\podpeek.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { throw ($e -join '; ') } }
+          Step 'compilar C#' { Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekNative.cs")); [PodPeekNative.Win]::Build }
+          Step 'tipos WinRT' {
+            $null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
+            $null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
+            $null = [Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType = WindowsRuntime]
+          }
+          Step 'crear escáner y filtro' {
+            $script:w = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher
+            $w.ScanningMode = 'Passive'
+            $m = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData
+            $m.CompanyId = 0x004C
+            $w.AdvertisementFilter.Advertisement.ManufacturerData.Add($m)
+            $w.SignalStrengthFilter.InRangeThresholdInDBm = -72
+            $w.GetType().FullName
+          }
+          Step 'suscribirse a Received (reflexión)' { [PodPeekNative.WinRTEvents]::Subscribe($script:w, 'Received') }
+          Step 'arrancar (sin Bluetooth en el runner puede fallar)' { $script:w.Start(); $script:w.Status }
+          Step 'vaciar cola' { [PodPeekNative.WinRTEvents]::Drain().Count }
+          Step 'audio: ¿AirPods conectados?' { [PodPeekNative.Audio]::IsConnected() }
+          Step 'audio: nombre' { [PodPeekNative.Audio]::DeviceName() }
+          Step 'medios (AsTask)' {
+            Add-Type -AssemblyName System.Runtime.WindowsRuntime
+            $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
+            $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
+            $t = $asTask.MakeGenericMethod([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]).Invoke($null, @([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()))
+            $null = $t.Wait(5000); "sesión: $($t.Result.GetCurrentSession())"
+          }
+          Step 'ventana XAML' {
+            Add-Type -AssemblyName PresentationFramework
+            $src = [IO.File]::ReadAllText("$pwd\script\podpeek.ps1")
+            $start = $src.IndexOf("[xml]`$xaml = @'") + 15
+            [xml]$x = $src.Substring($start, $src.IndexOf("'@", $start) - $start).Trim()
+            $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
+            [bool]$win.FindName('ArcL')
+          }
