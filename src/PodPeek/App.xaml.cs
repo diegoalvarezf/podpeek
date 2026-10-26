@@ -22,7 +22,7 @@ public partial class App : Application
     TrayIcon tray = null!;
 
     PodStatus? last;
-    bool shownSinceSeen, wasBothIn, pausedByUs;
+    bool wasBothIn, pausedByUs;
     int? warnedAt;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -70,15 +70,10 @@ public partial class App : Application
 
     async void OnStatus(PodStatus status)
     {
+        // Sin tus AirPods conectados no hay forma fiable de saber cuáles son los tuyos (en una oficina hay más)
+        if (!audio.IsConnected || status.Rssi < -65 || !SameModel(status)) return;
         last = status;
         Refresh();
-
-        // Al abrir el estuche (empiezan a llegar anuncios), la ventanita, como en el iPhone
-        if (!shownSinceSeen && settings.ShowOnConnect)
-        {
-            shownSinceSeen = true;
-            popup.ShowFor(TimeSpan.FromSeconds(6));
-        }
 
         // Batería baja: avisa una vez por bajada; se rearma al cargar
         if (status.LowestPod is int low)
@@ -109,16 +104,31 @@ public partial class App : Application
         wasBothIn = status.BothInEar;
     }
 
+    // ¿Puede ser este modelo el de los AirPods conectados? Por el nombre que les da Windows ("AirPods Pro de Diego")
+    bool SameModel(PodStatus status)
+    {
+        var name = audio.DeviceName;
+        if (name is null) return true;
+        var model = AppleProximity.ModelName(status.Model);
+        foreach (var kind in new[] { "Pro", "Max" })
+        {
+            bool inName = System.Text.RegularExpressions.Regex.IsMatch(name, $@"\b{kind}\b");
+            bool inModel = System.Text.RegularExpressions.Regex.IsMatch(model, $@"\b{kind}\b");
+            if (inName != inModel) return false;
+        }
+        return true;
+    }
+
     void OnLost()
     {
         last = null;
-        shownSinceSeen = false;
         wasBothIn = false;
         Refresh();
     }
 
     void OnConnectionChanged(bool connected)
     {
+        if (!connected) { last = null; wasBothIn = false; }
         if (connected && settings.AutoDefaultDevice)
         {
             try { audio.MakeDefault(); }

@@ -16,6 +16,9 @@ public sealed record PodStatus(
     bool LeftInEar,
     bool RightInEar)
 {
+    /// <summary>Intensidad de la señal en dBm (la rellena quien recibe el anuncio).</summary>
+    public short Rssi { get; init; } = short.MinValue;
+
     public bool BothInEar => LeftInEar && RightInEar;
     public bool AnyInEar => LeftInEar || RightInEar;
 

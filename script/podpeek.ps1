@@ -423,7 +423,6 @@ $script:Last = $null
 $script:LastSeen = [DateTime]::MinValue
 $script:Address = 0
 $script:Rssi = -999
-$script:ShownSinceSeen = $false
 $script:WasBothIn = $false
 $script:PausedByUs = $false
 $script:WarnedAt = $null
@@ -442,11 +441,6 @@ function On-Status($s) {
     $script:Last = $s
     Update-Tray
     if ($script:Showing) { Update-Popup $true }
-
-    if (-not $script:ShownSinceSeen -and $script:Settings.ShowOnConnect) {
-        $script:ShownSinceSeen = $true
-        Show-Popup 6
-    }
 
     $low = @($s.Left, $s.Right) | Where-Object { $null -ne $_ } | Measure-Object -Minimum
     if ($low.Count -gt 0) {
@@ -477,6 +471,9 @@ function On-Status($s) {
 function On-ConnectionChanged([bool]$connected) {
     $script:Connected = $connected
     $script:DeviceName = [PodPeekNative.Audio]::DeviceName()
+    if (-not $connected) {
+        $script:Last = $null; $script:WasBothIn = $false; $script:Address = 0; $script:Rssi = -999
+    }
     Write-Log $(if ($connected) { 'AirPods conectados' } else { 'AirPods desconectados' })
     if ($connected -and $script:Settings.AutoDefaultDevice) {
         try { Write-Log ("predeterminados: " + [PodPeekNative.Audio]::MakeDefault()) } catch { Write-Log "predeterminados: $_" }
@@ -513,12 +510,29 @@ try {
     Write-Log "escáner Bluetooth: $([PodPeekNative.BleScanner]::Status($script:Watcher)) $([PodPeekNative.BleScanner]::LastError)"
 } catch { Write-Log "no se pudo arrancar el escáner Bluetooth: $_" }
 
+# ¿Puede ser este modelo el de los AirPods conectados? Por el nombre que les da Windows ("AirPods Pro de Diego")
+function Test-SameModel($s) {
+    $name = $script:DeviceName
+    if (-not $name) { return $true }
+    $model = Get-ModelName $s.Model
+    foreach ($kind in 'Pro', 'Max') {
+        if (($name -match "\b$kind\b") -ne ($model -match "\b$kind\b")) { return $false }
+    }
+    return $true
+}
+
 function Read-Advertisements {
+    $samples = [PodPeekNative.BleScanner]::Drain()
+    # Sin tus AirPods conectados no hay forma fiable de saber cuáles son los tuyos (en la oficina hay más):
+    # entonces no usamos ninguna señal
+    if (-not $script:Connected) { return }
     # Llegan muchos: nos basta con el más reciente de los nuestros en cada ronda
     $latest = $null
-    foreach ($a in [PodPeekNative.BleScanner]::Drain()) {
+    foreach ($a in $samples) {
+        if ($a.Rssi -lt -65) { continue }   # los tuyos están pegados al PC
         $s = ConvertFrom-Proximity $a.Data
         if (-not $s) { continue }
+        if (-not (Test-SameModel $s)) { continue }
         $now = Get-Date
         $same = $a.Address -eq $script:Address
         $stale = ($now - $script:LastSeen).TotalSeconds -gt 8
@@ -556,7 +570,7 @@ $script:Timer.Add_Tick({
                 }
             }
             if ($script:Last -and ((Get-Date) - $script:LastSeen).TotalSeconds -gt 30) {
-                $script:Last = $null; $script:ShownSinceSeen = $false; $script:WasBothIn = $false
+                $script:Last = $null; $script:WasBothIn = $false
                 $script:Address = 0; $script:Rssi = -999
                 Update-Tray
                 if ($script:Showing) { Update-Popup $false }

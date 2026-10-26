@@ -80,7 +80,7 @@ sealed class PodWatcher : IDisposable
                 Log.Write($"anuncio {Convert.ToHexString(raw)} rssi={rssi} -> {status}");
             }
         }
-        Updated?.Invoke(status);
+        Updated?.Invoke(status with { Rssi = rssi });
     }
 
     void CheckLost()
