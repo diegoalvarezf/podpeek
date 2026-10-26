@@ -44,7 +44,9 @@ public static class AppleProximity
     /// <param name="data">Datos de fabricante sin el identificador de compañía.</param>
     public static PodStatus? Parse(ReadOnlySpan<byte> data)
     {
-        if (data.Length < 9 || data[0] != ProximityPairing) return null;
+        // Solo el mensaje de batería: 07 19 01 … (27 bytes). Desconectados, los AirPods emiten también 07 11 06 …
+        // (cifrado, el de "Buscar"), que no lleva la batería: leerlo como si la llevara da números al azar.
+        if (data.Length < 27 || data[0] != ProximityPairing || data[1] != 0x19 || data[2] != 0x01) return null;
 
         ushort model = (ushort)((data[3] << 8) | data[4]);
         byte status = data[5];
@@ -81,7 +83,11 @@ public static class AppleProximity
         0x1920 or 0x1B20 => "AirPods 4",
         0x0E20 => "AirPods Pro",
         0x1420 or 0x2420 => "AirPods Pro 2",
+        0x2720 => "AirPods Pro 3", // comprobado con unos A3064
         0x0A20 or 0x1F20 => "AirPods Max",
         _ => "AirPods",
     };
+
+    /// <summary>Si conocemos el modelo (para no descartar por nombre unos AirPods de un modelo que no tenemos en la lista).</summary>
+    public static bool IsKnownModel(ushort model) => ModelName(model) != "AirPods" || model == 0x0220;
 }

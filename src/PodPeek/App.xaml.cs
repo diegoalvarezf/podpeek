@@ -108,7 +108,7 @@ public partial class App : Application
     bool SameModel(PodStatus status)
     {
         var name = audio.DeviceName;
-        if (name is null) return true;
+        if (name is null || !AppleProximity.IsKnownModel(status.Model)) return true;
         var model = AppleProximity.ModelName(status.Model);
         foreach (var kind in new[] { "Pro", "Max" })
         {

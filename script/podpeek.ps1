@@ -76,7 +76,9 @@ function Wait-WinRT($Operation, [Type]$ResultType) {
 # ─── El anuncio Bluetooth de los AirPods ────────────────────────────────────
 # Datos de fabricante de Apple (0x004C), mensaje 0x07 "proximity pairing": batería, carga y si están puestos.
 function ConvertFrom-Proximity([byte[]]$d) {
-    if ($d.Length -lt 9 -or $d[0] -ne 0x07) { return $null }
+    # Solo el mensaje de batería: 07 19 01 … (27 bytes). Desconectados, los AirPods emiten también 07 11 06 …
+    # (cifrado, el de "Buscar"), que no lleva la batería: leerlo como si la llevara da números al azar
+    if ($d.Length -lt 27 -or $d[0] -ne 0x07 -or $d[1] -ne 0x19 -or $d[2] -ne 0x01) { return $null }
     $status = $d[5]
     $flip = ($status -band 0x20) -eq 0
     $hi = $d[6] -shr 4; $lo = $d[6] -band 0x0F
@@ -99,7 +101,7 @@ function Get-ModelName([int]$m) {
     switch ($m) {
         0x0220 { 'AirPods' } 0x0F20 { 'AirPods (2.ª gen.)' } 0x1320 { 'AirPods (3.ª gen.)' }
         0x1920 { 'AirPods 4' } 0x1B20 { 'AirPods 4' } 0x0E20 { 'AirPods Pro' }
-        0x1420 { 'AirPods Pro 2' } 0x2420 { 'AirPods Pro 2' } 0x0A20 { 'AirPods Max' }
+        0x1420 { 'AirPods Pro 2' } 0x2420 { 'AirPods Pro 2' } 0x2720 { 'AirPods Pro 3' } 0x0A20 { 'AirPods Max' }
         default { 'AirPods' }
     }
 }
@@ -468,6 +470,17 @@ function On-Status($s) {
     $script:WasBothIn = $bothIn
 }
 
+# Salida y micrófono predeterminados. El micrófono (perfil manos libres) llega unos segundos después de conectar,
+# así que se reintenta hasta que aparece: es lo que hace que Teams los coja enseguida
+$script:MicDeadline = $null
+function Set-AirPodsDefault {
+    try {
+        $result = [PodPeekNative.Audio]::MakeDefault()
+        Write-Log "predeterminados: $result"
+        if ($result -notmatch 'entrada=-$') { $script:MicDeadline = $null }
+    } catch { Write-Log "predeterminados: $_" }
+}
+
 function On-ConnectionChanged([bool]$connected) {
     $script:Connected = $connected
     $script:DeviceName = [PodPeekNative.Audio]::DeviceName()
@@ -475,9 +488,7 @@ function On-ConnectionChanged([bool]$connected) {
         $script:Last = $null; $script:WasBothIn = $false; $script:Address = 0; $script:Rssi = -999
     }
     Write-Log $(if ($connected) { 'AirPods conectados' } else { 'AirPods desconectados' })
-    if ($connected -and $script:Settings.AutoDefaultDevice) {
-        try { Write-Log ("predeterminados: " + [PodPeekNative.Audio]::MakeDefault()) } catch { Write-Log "predeterminados: $_" }
-    }
+    if ($connected -and $script:Settings.AutoDefaultDevice) { Set-AirPodsDefault; $script:MicDeadline = (Get-Date).AddSeconds(30) }
     $script:UI.ConnectButton.IsEnabled = $true
     $script:UI.ConnectButton.Content = 'Conectar'
     Update-Tray
@@ -515,6 +526,7 @@ function Test-SameModel($s) {
     $name = $script:DeviceName
     if (-not $name) { return $true }
     $model = Get-ModelName $s.Model
+    if ($model -eq 'AirPods' -and $s.Model -ne 0x0220) { return $true }   # modelo que no conocemos: no descartamos
     foreach ($kind in 'Pro', 'Max') {
         if (($name -match "\b$kind\b") -ne ($model -match "\b$kind\b")) { return $false }
     }
@@ -561,6 +573,10 @@ $script:Timer.Add_Tick({
         if ($script:Ticks % 8 -eq 0) {
             $now = [PodPeekNative.Audio]::IsConnected()
             if ($now -ne $script:Connected) { On-ConnectionChanged $now }
+            if ($script:MicDeadline) {
+                if (-not $script:Connected -or (Get-Date) -gt $script:MicDeadline) { $script:MicDeadline = $null }
+                else { Set-AirPodsDefault }
+            }
             if ($script:ConnectDeadline -and (Get-Date) -gt $script:ConnectDeadline) {
                 $script:ConnectDeadline = $null
                 if (-not $script:Connected) {
