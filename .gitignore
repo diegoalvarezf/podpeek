@@ -1,5 +1,8 @@
-bin/
-obj/
+# salidas de compilación de .NET (no la carpeta bin/ de la raíz, que es el lanzador de npm)
+src/**/bin/
+src/**/obj/
+tests/**/bin/
+tests/**/obj/
 out/
 .vs/
 *.user

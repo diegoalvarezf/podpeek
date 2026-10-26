@@ -35,6 +35,12 @@ jobs:
           $w = [PodPeekNative.BleScanner]::Start(-72)   # sin Bluetooth en el runner queda en Aborted, pero se crea
           if ([PodPeekNative.BleScanner]::LastError) { throw [PodPeekNative.BleScanner]::LastError }
           Write-Host "escáner: $([PodPeekNative.BleScanner]::Status($w))"
+      - name: Se instala con npm y deja el comando podpeek
+        shell: powershell
+        run: |
+          npm install -g .
+          if (-not (Get-Command podpeek -ErrorAction SilentlyContinue)) { throw 'npm no ha creado el comando podpeek' }
+          Write-Host "podpeek -> $((Get-Command podpeek).Source)"
       - name: Arranca 15 s sin errores
         shell: powershell
         run: |
