@@ -243,17 +243,21 @@ $script:UI.Slide = $script:UI.Root.RenderTransform
 
 function Set-Theme {
     $dark = [PodPeekNative.Win]::AppsDark
-    $r = $script:Window.Resources
-    $r['TextBrush']          = New-Brush $(if ($dark) { '#F5F5F7' } else { '#1D1D1F' })
-    $r['SecondaryTextBrush'] = New-Brush $(if ($dark) { '#98989D' } else { '#6E6E73' })
-    $r['TrackBrush']         = New-Brush $(if ($dark) { '#2EFFFFFF' } else { '#17000000' })
-    $r['IconBrush']          = New-Brush $(if ($dark) { '#E5E5EA' } else { '#3A3A3C' })
-    $r['ButtonBrush']        = New-Brush $(if ($dark) { '#26FFFFFF' } else { '#14000000' })
-    $r['ButtonHoverBrush']   = New-Brush $(if ($dark) { '#3DFFFFFF' } else { '#24000000' })
-    $r['PanelBrush'] = if ([PodPeekNative.Win]::SupportsBackdrop) {
-        New-Brush $(if ($dark) { '#66161618' } else { '#99F5F5F7' })
-    } else {
-        New-Brush $(if ($dark) { '#2C2C2E' } else { '#F2F2F7' })
+    $backdrop = [PodPeekNative.Win]::SupportsBackdrop
+    $colors = @{
+        TextBrush          = @('#F5F5F7', '#1D1D1F')
+        SecondaryTextBrush = @('#98989D', '#6E6E73')
+        TrackBrush         = @('#2EFFFFFF', '#17000000')
+        IconBrush          = @('#E5E5EA', '#3A3A3C')
+        ButtonBrush        = @('#26FFFFFF', '#14000000')
+        ButtonHoverBrush   = @('#3DFFFFFF', '#24000000')
+        # Con acrílico (Windows 11 22H2+), un velo suave; sin él, fondo sólido
+        PanelBrush         = $(if ($backdrop) { @('#66161618', '#99F5F5F7') } else { @('#2C2C2E', '#F2F2F7') })
+    }
+    foreach ($key in $colors.Keys) {
+        $hex = $colors[$key][$(if ($dark) { 0 } else { 1 })]
+        # El cast quita el envoltorio PSObject: WPF no acepta un PSObject como pincel en los recursos
+        $script:Window.Resources[$key] = [System.Windows.Media.Brush](New-Brush $hex)
     }
     $h = (New-Object System.Windows.Interop.WindowInteropHelper $script:Window).Handle
     if ($h -ne [IntPtr]::Zero) { [PodPeekNative.Win]::Apply($h, $dark) }
