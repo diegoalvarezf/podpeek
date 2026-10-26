@@ -17,6 +17,17 @@ Windows 10 (1809+) y Windows 11. El fondo translúcido es de Windows 11 22H2 en 
 En [Releases](../../releases), `PodPeek.exe`. La primera vez Windows puede avisar de que es una app sin firmar
 ("Windows protegió su PC" › Más información › Ejecutar de todas formas).
 
+## Versión script (sin .exe)
+
+Para equipos donde no se puede descargar un `.exe`. Hace lo mismo, con Windows PowerShell 5.1 y Node.js:
+
+```powershell
+npm install -g https://github.com/diegoalvarezf/podpeek/archive/refs/heads/main.tar.gz
+podpeek
+```
+
+El registro está en `%LOCALAPPDATA%\PodPeek\podpeek-script.log`.
+
 ## Cómo funciona
 
 - **Batería y gestos.** Los AirPods emiten cada poco un anuncio Bluetooth LE de Apple (fabricante `0x004C`,
