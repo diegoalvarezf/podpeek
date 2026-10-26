@@ -57,21 +57,8 @@ trap { Write-Log "error: $_ $($_.ScriptStackTrace)"; continue }
 Write-Log "PodPeek script en Windows $([Environment]::OSVersion.Version), PowerShell $($PSVersionTable.PSVersion)"
 
 # ─── Partes nativas (audio y ventana) ───────────────────────────────────────
-Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $script:Here 'PodPeekNative.cs')))
-
-# El escáner Bluetooth va en C# con referencias a WinRT (PowerShell 5.1 no puede recibir eventos WinRT)
-function Get-WinRTReferences {
-    $winmd = Join-Path $env:WINDIR 'System32\WinMetadata'
-    $framework = [Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
-    @(
-        (Join-Path $winmd 'Windows.Devices.winmd'),
-        (Join-Path $winmd 'Windows.Foundation.winmd'),
-        (Join-Path $winmd 'Windows.Storage.winmd'),
-        ([System.WindowsRuntimeSystemExtensions].Assembly.Location),
-        (Join-Path $framework 'System.Runtime.dll')
-    )
-}
-Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $script:Here 'PodPeekBle.cs'))) -ReferencedAssemblies (Get-WinRTReferences)
+. (Join-Path $script:Here 'PodPeekLoader.ps1')
+Import-PodPeekNative $script:Here
 
 # ─── WinRT: Bluetooth y control de medios ───────────────────────────────────
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]

@@ -31,14 +31,9 @@ jobs:
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile("$pwd\script\podpeek.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
-          Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekNative.cs"))
+          . "$pwd\script\PodPeekLoader.ps1"
+          Import-PodPeekNative "$pwd\script"
           [PodPeekNative.Win]::Build
-          Add-Type -AssemblyName System.Runtime.WindowsRuntime
-          $winmd = Join-Path $env:WINDIR 'System32\WinMetadata'
-          $refs = @((Join-Path $winmd 'Windows.Devices.winmd'), (Join-Path $winmd 'Windows.Foundation.winmd'), (Join-Path $winmd 'Windows.Storage.winmd'),
-                    ([System.WindowsRuntimeSystemExtensions].Assembly.Location),
-                    (Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'System.Runtime.dll'))
-          Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekBle.cs")) -ReferencedAssemblies $refs
           try { [PodPeekNative.Ble]::Start(-72) } catch { Write-Host "sin Bluetooth en el runner (normal): $($_.Exception.Message)" }
           [PodPeekNative.Ble]::Drain().Count
           Write-Host "Escáner Bluetooth compila"
