@@ -20,6 +20,33 @@ jobs:
           dotnet-version: 8.0.x
       - run: dotnet test tests/PodPeek.Core.Tests
 
+  script:
+    name: Versión script (PowerShell 5.1)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sin errores de sintaxis y la parte nativa compila
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$pwd\script\podpeek.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekNative.cs"))
+          [PodPeekNative.Win]::Build
+          $null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
+          $w = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher
+          Register-ObjectEvent -InputObject $w -EventName Received -SourceIdentifier Test | Out-Null
+          Write-Host "WinRT y eventos OK"
+          # La ventana (XAML) se carga sin errores
+          Add-Type -AssemblyName PresentationFramework
+          $src = [IO.File]::ReadAllText("$pwd\script\podpeek.ps1")
+          $start = $src.IndexOf("[xml]`$xaml = @'") + 15
+          $end = $src.IndexOf("'@", $start)
+          [xml]$xaml = $src.Substring($start, $end - $start).Trim()
+          $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
+          if (-not $win.FindName('ArcL')) { throw 'falta ArcL' }
+          Write-Host "XAML OK"
+
   build:
     name: PodPeek.exe
     needs: test

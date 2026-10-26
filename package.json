@@ -1,0 +1,11 @@
+{
+  "name": "podpeek",
+  "version": "0.2.0",
+  "description": "La batería y los gestos de tus AirPods en Windows, con estilo de macOS (versión script, sin .exe)",
+  "bin": { "podpeek": "bin/podpeek.js" },
+  "files": ["bin", "script"],
+  "os": ["win32"],
+  "engines": { "node": ">=16" },
+  "license": "MIT",
+  "repository": "github:diegoalvarezf/podpeek"
+}
