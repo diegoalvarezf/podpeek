@@ -44,3 +44,11 @@ jobs:
             $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x))
             [bool]$win.FindName('ArcL')
           }
+      - name: Arranque completo (15 s) y registro
+        shell: powershell
+        run: |
+          $p = Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"$pwd\script\podpeek.ps1" -PassThru
+          Start-Sleep 15
+          Write-Host "sigue vivo: $(-not $p.HasExited)"
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          Get-Content "$env:LOCALAPPDATA\PodPeek\podpeek-script.log" -Encoding UTF8 | ForEach-Object { Write-Host "LOG $_" }
