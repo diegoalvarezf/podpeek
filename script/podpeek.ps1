@@ -59,10 +59,21 @@ Write-Log "PodPeek script en Windows $([Environment]::OSVersion.Version), PowerS
 # ─── Partes nativas (audio y ventana) ───────────────────────────────────────
 Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $script:Here 'PodPeekNative.cs')))
 
+# El escáner Bluetooth va en C# con referencias a WinRT (PowerShell 5.1 no puede recibir eventos WinRT)
+function Get-WinRTReferences {
+    $winmd = Join-Path $env:WINDIR 'System32\WinMetadata'
+    $framework = [Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()
+    @(
+        (Join-Path $winmd 'Windows.Devices.winmd'),
+        (Join-Path $winmd 'Windows.Foundation.winmd'),
+        (Join-Path $winmd 'Windows.Storage.winmd'),
+        ([System.WindowsRuntimeSystemExtensions].Assembly.Location),
+        (Join-Path $framework 'System.Runtime.dll')
+    )
+}
+Add-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path $script:Here 'PodPeekBle.cs'))) -ReferencedAssemblies (Get-WinRTReferences)
+
 # ─── WinRT: Bluetooth y control de medios ───────────────────────────────────
-$null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
-$null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
-$null = [Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType = WindowsRuntime]
 $null = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
 
 # Las operaciones asíncronas de WinRT, esperadas desde PowerShell 5.1
@@ -507,42 +518,26 @@ function Connect-AirPods {
 $script:UI.ConnectButton.Add_Click({ Connect-AirPods })
 
 # ─── Bluetooth: solo anuncios de Apple, y con señal suficiente ──────────────
-$script:Watcher = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher
-$script:Watcher.ScanningMode = 'Passive'
-$appleFilter = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData
-$appleFilter.CompanyId = 0x004C
-$script:Watcher.AdvertisementFilter.Advertisement.ManufacturerData.Add($appleFilter)
-$script:Watcher.SignalStrengthFilter.InRangeThresholdInDBm = -72
-$null = Register-ObjectEvent -InputObject $script:Watcher -EventName Received -SourceIdentifier PodPeekAdv
-try { $script:Watcher.Start(); Write-Log 'escáner Bluetooth en marcha' } catch { Write-Log "no se pudo arrancar el escáner Bluetooth: $_" }
+try { Write-Log ("escáner Bluetooth: " + [PodPeekNative.Ble]::Start(-72)) } catch { Write-Log "no se pudo arrancar el escáner Bluetooth: $_" }
 
 function Read-Advertisements {
-    $events = @(Get-Event -SourceIdentifier PodPeekAdv -ErrorAction SilentlyContinue)
-    foreach ($ev in $events) { Remove-Event -EventIdentifier $ev.EventIdentifier }
-    # Nos quedamos con los últimos de cada ronda: llegan muchos y basta con el más reciente
+    # Llegan muchos: nos basta con el más reciente de los nuestros en cada ronda
     $latest = $null
-    foreach ($ev in $events) {
-        $a = $ev.SourceEventArgs
-        if ($a.RawSignalStrengthInDBm -lt -72) { continue }
-        foreach ($m in $a.Advertisement.ManufacturerData) {
-            if ($m.CompanyId -ne 0x004C) { continue }
-            $bytes = New-Object byte[] $m.Data.Length
-            [Windows.Storage.Streams.DataReader]::FromBuffer($m.Data).ReadBytes($bytes)
-            $s = ConvertFrom-Proximity $bytes
-            if (-not $s) { continue }
-            $now = Get-Date
-            $same = $a.BluetoothAddress -eq $script:Address
-            $stale = ($now - $script:LastSeen).TotalSeconds -gt 8
-            # Varios AirPods cerca (oficina): seguimos a los de más señal y solo cambiamos si otros llegan claramente más fuertes
-            if (-not $same -and -not $stale -and $a.RawSignalStrengthInDBm -lt $script:Rssi + 6) { continue }
-            $script:Address = $a.BluetoothAddress
-            $script:Rssi = $a.RawSignalStrengthInDBm
-            $script:LastSeen = $now
-            $latest = $s
-            if (($now - $script:LastRawLog).TotalMinutes -ge 1) {
-                $script:LastRawLog = $now
-                Write-Log ("anuncio {0} rssi={1}" -f ([BitConverter]::ToString($bytes)), $a.RawSignalStrengthInDBm)
-            }
+    foreach ($a in [PodPeekNative.Ble]::Drain()) {
+        $s = ConvertFrom-Proximity $a.Data
+        if (-not $s) { continue }
+        $now = Get-Date
+        $same = $a.Address -eq $script:Address
+        $stale = ($now - $script:LastSeen).TotalSeconds -gt 8
+        # Varios AirPods cerca (oficina): seguimos a los de más señal y solo cambiamos si otros llegan claramente más fuertes
+        if (-not $same -and -not $stale -and $a.Rssi -lt $script:Rssi + 6) { continue }
+        $script:Address = $a.Address
+        $script:Rssi = $a.Rssi
+        $script:LastSeen = $now
+        $latest = $s
+        if (($now - $script:LastRawLog).TotalMinutes -ge 1) {
+            $script:LastRawLog = $now
+            Write-Log ("anuncio {0} rssi={1}" -f ([BitConverter]::ToString($a.Data)), $a.Rssi)
         }
     }
     if ($latest) { On-Status $latest }
@@ -593,8 +588,7 @@ $script:ThemeTimer.Start()
 
 function Stop-PodPeek {
     Write-Log 'salir'
-    try { $script:Watcher.Stop() } catch { }
-    Unregister-Event -SourceIdentifier PodPeekAdv -ErrorAction SilentlyContinue
+    [PodPeekNative.Ble]::Stop()
     $script:Tray.Visible = $false
     $script:Tray.Dispose()
     [System.Windows.Threading.Dispatcher]::CurrentDispatcher.InvokeShutdown()

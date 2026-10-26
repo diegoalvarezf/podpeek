@@ -33,10 +33,14 @@ jobs:
           if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekNative.cs"))
           [PodPeekNative.Win]::Build
-          $null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
-          $w = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher
-          Register-ObjectEvent -InputObject $w -EventName Received -SourceIdentifier Test | Out-Null
-          Write-Host "WinRT y eventos OK"
+          $winmd = Join-Path $env:WINDIR 'System32\WinMetadata'
+          $refs = @((Join-Path $winmd 'Windows.Devices.winmd'), (Join-Path $winmd 'Windows.Foundation.winmd'), (Join-Path $winmd 'Windows.Storage.winmd'),
+                    ([System.WindowsRuntimeSystemExtensions].Assembly.Location),
+                    (Join-Path ([Runtime.InteropServices.RuntimeEnvironment]::GetRuntimeDirectory()) 'System.Runtime.dll'))
+          Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekBle.cs")) -ReferencedAssemblies $refs
+          try { [PodPeekNative.Ble]::Start(-72) } catch { Write-Host "sin Bluetooth en el runner (normal): $($_.Exception.Message)" }
+          [PodPeekNative.Ble]::Drain().Count
+          Write-Host "Escáner Bluetooth compila"
           # La ventana (XAML) se carga sin errores
           Add-Type -AssemblyName PresentationFramework
           $src = [IO.File]::ReadAllText("$pwd\script\podpeek.ps1")
