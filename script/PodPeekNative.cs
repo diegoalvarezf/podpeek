@@ -240,46 +240,128 @@ namespace PodPeekNative
     using System.Reflection;
     using System.Runtime.InteropServices.WindowsRuntime;
 
-    /// <summary>
-    /// Suscribirse a un evento WinRT desde PowerShell 5.1, que no sabe hacerlo (Register-ObjectEvent lo rechaza).
-    /// Se hace como .NET por dentro: WindowsRuntimeMarshal.AddEventHandler, llamado por reflexión para no tener que
-    /// compilar contra las librerías WinRT. Los argumentos de cada evento se guardan en una cola que PowerShell
-    /// vacía cada poco con Drain().
-    /// </summary>
-    public static class WinRTEvents
+    /// <summary>Un anuncio Bluetooth de unos AirPods, ya extraído a tipos normales de .NET.</summary>
+    public sealed class AdvSample
     {
-        static readonly object Gate = new object();
-        static readonly List<object> Queue = new List<object>();
+        public ulong Address;
+        public short Rssi;
+        public byte[] Data;
+    }
 
-        public static void OnEvent(object sender, object args)
+    /// <summary>
+    /// El escáner Bluetooth para PowerShell 5.1, que ni se suscribe a eventos WinRT (Register-ObjectEvent los rechaza)
+    /// ni reconoce sus listas. Todo por reflexión, para no tener que compilar contra las librerías WinRT:
+    /// la suscripción con WindowsRuntimeMarshal.AddEventHandler (como hace .NET por dentro) y los datos de cada
+    /// anuncio se copian a AdvSample. PowerShell recoge la cola cada poco con Drain().
+    /// </summary>
+    public static class BleScanner
+    {
+        const ushort Apple = 0x004C;
+        static readonly object Gate = new object();
+        static readonly List<AdvSample> Queue = new List<AdvSample>();
+        static Type dataReaderType;
+        public static string LastError = "";
+
+        static Type WinRT(string name, string assembly)
         {
-            lock (Gate)
-            {
-                if (Queue.Count >= 300) Queue.RemoveAt(0);
-                Queue.Add(args);
-            }
+            return Type.GetType(name + ", " + assembly + ", ContentType=WindowsRuntime", true);
         }
 
-        public static void Subscribe(object target, string eventName)
+        /// <summary>Crea el escáner (solo anuncios de Apple, con señal suficiente), se suscribe y lo arranca.</summary>
+        public static object Start(short minRssi)
+        {
+            Type watcherType = WinRT("Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher", "Windows.Devices.Bluetooth");
+            Type mdType = WinRT("Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData", "Windows.Devices.Bluetooth");
+            Type scanningMode = WinRT("Windows.Devices.Bluetooth.Advertisement.BluetoothLEScanningMode", "Windows.Devices.Bluetooth");
+            dataReaderType = WinRT("Windows.Storage.Streams.DataReader", "Windows.Storage.Streams");
+
+            object watcher = Activator.CreateInstance(watcherType);
+            watcherType.GetProperty("ScanningMode").SetValue(watcher, Enum.Parse(scanningMode, "Passive"), null);
+            object rssiFilter = watcherType.GetProperty("SignalStrengthFilter").GetValue(watcher, null);
+            rssiFilter.GetType().GetProperty("InRangeThresholdInDBm").SetValue(rssiFilter, (short?)minRssi, null);
+            try
+            {
+                object md = Activator.CreateInstance(mdType);
+                mdType.GetProperty("CompanyId").SetValue(md, Apple, null);
+                object filter = watcherType.GetProperty("AdvertisementFilter").GetValue(watcher, null);
+                object adv = filter.GetType().GetProperty("Advertisement").GetValue(filter, null);
+                object list = adv.GetType().GetProperty("ManufacturerData").GetValue(adv, null);
+                typeof(ICollection<>).MakeGenericType(mdType).GetMethod("Add").Invoke(list, new object[] { md });
+            }
+            catch (Exception e) { LastError = "filtro de Apple no aplicado: " + Inner(e).Message; }
+
+            Subscribe(watcher, "Received", typeof(BleScanner).GetMethod("OnReceived"));
+            watcherType.GetMethod("Start").Invoke(watcher, null);
+            return watcher;
+        }
+
+        public static string Status(object watcher)
+        {
+            return watcher.GetType().GetProperty("Status").GetValue(watcher, null).ToString();
+        }
+
+        public static void Stop(object watcher)
+        {
+            try { watcher.GetType().GetMethod("Stop").Invoke(watcher, null); } catch { }
+        }
+
+        static void Subscribe(object target, string eventName, MethodInfo staticHandler)
         {
             EventInfo ev = target.GetType().GetEvent(eventName);
-            if (ev == null) throw new ArgumentException("No existe el evento " + eventName);
             Type handlerType = ev.EventHandlerType;
             Type tokenType = typeof(EventRegistrationToken);
-
-            Delegate handler = Delegate.CreateDelegate(handlerType, typeof(WinRTEvents).GetMethod("OnEvent"));
+            Delegate handler = Delegate.CreateDelegate(handlerType, staticHandler);
             Delegate add = Delegate.CreateDelegate(typeof(Func<,>).MakeGenericType(handlerType, tokenType), target, ev.GetAddMethod());
             Delegate remove = Delegate.CreateDelegate(typeof(Action<>).MakeGenericType(tokenType), target, ev.GetRemoveMethod());
-
-            MethodInfo addHandler = typeof(WindowsRuntimeMarshal).GetMethod("AddEventHandler").MakeGenericMethod(handlerType);
-            addHandler.Invoke(null, new object[] { add, remove, handler });
+            typeof(WindowsRuntimeMarshal).GetMethod("AddEventHandler").MakeGenericMethod(handlerType)
+                .Invoke(null, new object[] { add, remove, handler });
         }
 
-        public static object[] Drain()
+        public static void OnReceived(object sender, object args)
+        {
+            try
+            {
+                Type t = args.GetType();
+                short rssi = (short)t.GetProperty("RawSignalStrengthInDBm").GetValue(args, null);
+                ulong address = (ulong)t.GetProperty("BluetoothAddress").GetValue(args, null);
+                object adv = t.GetProperty("Advertisement").GetValue(args, null);
+                PropertyInfo mdProp = adv.GetType().GetProperty("ManufacturerData");
+                object list = mdProp.GetValue(adv, null);
+                Type itemType = mdProp.PropertyType.GetGenericArguments()[0];
+                var items = (System.Collections.IEnumerator)typeof(IEnumerable<>).MakeGenericType(itemType)
+                    .GetMethod("GetEnumerator").Invoke(list, null);
+                while (items.MoveNext())
+                {
+                    object md = items.Current;
+                    if ((ushort)itemType.GetProperty("CompanyId").GetValue(md, null) != Apple) continue;
+                    byte[] data = ReadBuffer(itemType.GetProperty("Data").GetValue(md, null));
+                    if (data.Length < 9 || data[0] != 0x07) continue; // solo el mensaje de los AirPods
+                    lock (Gate)
+                    {
+                        if (Queue.Count >= 200) Queue.RemoveAt(0);
+                        Queue.Add(new AdvSample { Address = address, Rssi = rssi, Data = data });
+                    }
+                }
+            }
+            catch (Exception e) { LastError = "anuncio ilegible: " + Inner(e).Message; }
+        }
+
+        static byte[] ReadBuffer(object buffer)
+        {
+            object reader = dataReaderType.GetMethod("FromBuffer").Invoke(null, new object[] { buffer });
+            uint length = (uint)dataReaderType.GetProperty("UnconsumedBufferLength").GetValue(reader, null);
+            byte[] data = new byte[length];
+            dataReaderType.GetMethod("ReadBytes").Invoke(reader, new object[] { data });
+            return data;
+        }
+
+        static Exception Inner(Exception e) { return e.InnerException ?? e; }
+
+        public static AdvSample[] Drain()
         {
             lock (Gate)
             {
-                object[] all = Queue.ToArray();
+                AdvSample[] all = Queue.ToArray();
                 Queue.Clear();
                 return all;
             }

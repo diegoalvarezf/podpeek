@@ -17,23 +17,16 @@ jobs:
           }
           Step 'sintaxis' { $e = $null; [System.Management.Automation.Language.Parser]::ParseFile("$pwd\script\podpeek.ps1", [ref]$null, [ref]$e) | Out-Null; if ($e) { throw ($e -join '; ') } }
           Step 'compilar C#' { Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekNative.cs")); [PodPeekNative.Win]::Build }
-          Step 'tipos WinRT' {
-            $null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
-            $null = [Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData, Windows.Devices.Bluetooth, ContentType = WindowsRuntime]
-            $null = [Windows.Storage.Streams.DataReader, Windows.Storage.Streams, ContentType = WindowsRuntime]
+          Step 'escáner: crear, filtrar, suscribir y arrancar' {
+            $script:w = [PodPeekNative.BleScanner]::Start(-72)
+            "estado=$([PodPeekNative.BleScanner]::Status($script:w)) aviso=$([PodPeekNative.BleScanner]::LastError)"
           }
-          Step 'crear escáner y filtro' {
-            $script:w = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher
-            $w.ScanningMode = 'Passive'
-            $m = New-Object Windows.Devices.Bluetooth.Advertisement.BluetoothLEManufacturerData
-            $m.CompanyId = 0x004C
-            $w.AdvertisementFilter.Advertisement.ManufacturerData.Add($m)
-            $w.SignalStrengthFilter.InRangeThresholdInDBm = -72
-            $w.GetType().FullName
+          Step 'evento de prueba (anuncio de AirPods simulado)' {
+            # Sin Bluetooth en el runner: comprobamos al menos que el manejador no rompe con argumentos extraños
+            [PodPeekNative.BleScanner]::OnReceived($null, 'no es un anuncio')
+            [PodPeekNative.BleScanner]::LastError
           }
-          Step 'suscribirse a Received (reflexión)' { [PodPeekNative.WinRTEvents]::Subscribe($script:w, 'Received') }
-          Step 'arrancar (sin Bluetooth en el runner puede fallar)' { $script:w.Start(); $script:w.Status }
-          Step 'vaciar cola' { [PodPeekNative.WinRTEvents]::Drain().Count }
+          Step 'vaciar cola' { [PodPeekNative.BleScanner]::Drain().Count }
           Step 'audio: ¿AirPods conectados?' { [PodPeekNative.Audio]::IsConnected() }
           Step 'audio: nombre' { [PodPeekNative.Audio]::DeviceName() }
           Step 'medios (AsTask)' {
