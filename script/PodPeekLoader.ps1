@@ -21,7 +21,6 @@ function Import-PodPeekNative([string]$Dir) {
         (Join-Path $winmd 'Windows.Devices.winmd'),
         (Join-Path $winmd 'Windows.Foundation.winmd'),
         (Join-Path $winmd 'Windows.Storage.winmd'),
-        ([System.WindowsRuntimeSystemExtensions].Assembly.Location),
         (Join-Path $framework 'System.Runtime.dll')
     )
 }
