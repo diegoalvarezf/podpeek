@@ -33,6 +33,7 @@ jobs:
           if ($errors) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           Add-Type -TypeDefinition ([IO.File]::ReadAllText("$pwd\script\PodPeekNative.cs"))
           [PodPeekNative.Win]::Build
+          Add-Type -AssemblyName System.Runtime.WindowsRuntime
           $winmd = Join-Path $env:WINDIR 'System32\WinMetadata'
           $refs = @((Join-Path $winmd 'Windows.Devices.winmd'), (Join-Path $winmd 'Windows.Foundation.winmd'), (Join-Path $winmd 'Windows.Storage.winmd'),
                     ([System.WindowsRuntimeSystemExtensions].Assembly.Location),
