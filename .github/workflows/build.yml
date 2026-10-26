@@ -1,0 +1,42 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Tests del lector de AirPods
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test tests/PodPeek.Core.Tests
+
+  build:
+    name: PodPeek.exe
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publicar un único .exe con .NET dentro
+        run: dotnet publish src/PodPeek/PodPeek.csproj -c Release -o out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PodPeek
+          path: out/PodPeek.exe
+      - name: Publicar versión
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" out/PodPeek.exe --title "PodPeek ${{ github.ref_name }}" --generate-notes
